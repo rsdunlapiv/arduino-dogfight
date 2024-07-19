@@ -24,8 +24,9 @@ const char MQTT_TOPIC_CONTROLLER_UPDATE[] = "$aws/things/Controller/shadow/name/
 
 #define HEARTBEAT_DELAY 5000   //ms delay between heatbeat messages
 
-unsigned int hitCount = 0;
+unsigned int hitcount = 0;
 unsigned long lastHeartbeat = 0;
+int buttonPrevState = LOW;
 
 void sendHeartbeat(void)
 {
@@ -34,13 +35,21 @@ void sendHeartbeat(void)
   JsonObject reported = state.createNestedObject("reported");
   reported["connected"] = "true";
 
-  //Serial.print("Heartbeat msg = ");
-  //serializeJson(doc, Serial);
+  char shadow[measureJson(doc) + 1];
+  serializeJson(doc, shadow, sizeof(shadow));
+  publishToTopic(MQTT_TOPIC_CONTROLLER_UPDATE, shadow);
+}
+
+void resetHitcount()
+{
+  JsonDocument doc;
+  JsonObject state = doc.createNestedObject("state");
+  JsonObject reported = state.createNestedObject("reported");
+  reported["hitcount"] = "0";
 
   char shadow[measureJson(doc) + 1];
   serializeJson(doc, shadow, sizeof(shadow));
-  if (!client.publish(MQTT_TOPIC_CONTROLLER_UPDATE, shadow, false))
-    pubSubErr(client.state());
+  publishToTopic(MQTT_TOPIC_CHOPPER_UPDATE, shadow);
 }
 
 /* pin to led mapping */
@@ -52,18 +61,74 @@ uint8_t red    = D5_PIN;
 uint8_t button = D6_PIN;
 uint8_t blue   = D7_PIN;
 
-void resetHealthLEDs()
+void updateHealthLEDs()
 {
-  digitalWrite(green1, HIGH);
-  digitalWrite(green2, HIGH);
-  digitalWrite(green3, HIGH);
-  digitalWrite(yellow, LOW);
+  if (hitcount >= 4) {
+   digitalWrite(red, HIGH);
+   digitalWrite(yellow, LOW);
+   digitalWrite(green1, LOW);
+   digitalWrite(green2, LOW);
+   digitalWrite(green3, LOW); 
+  }
+  else if (hitcount == 3) {
+   digitalWrite(red, LOW);
+   digitalWrite(yellow, HIGH);
+   digitalWrite(green1, LOW);
+   digitalWrite(green2, LOW);
+   digitalWrite(green3, LOW); 
+  }
+  else if (hitcount == 2) {
+   digitalWrite(red, LOW);
+   digitalWrite(yellow, LOW);
+   digitalWrite(green1, LOW);
+   digitalWrite(green2, LOW);
+   digitalWrite(green3, HIGH); 
+  }
+  else if (hitcount == 1) {
   digitalWrite(red, LOW);
+   digitalWrite(yellow, LOW);
+   digitalWrite(green1, LOW);
+   digitalWrite(green2, HIGH);
+   digitalWrite(green3, HIGH); 
+  }
+  else {  //hitcount == 0
+   digitalWrite(red, LOW);
+   digitalWrite(yellow, LOW);
+   digitalWrite(green1, HIGH);
+   digitalWrite(green2, HIGH);
+   digitalWrite(green3, HIGH); 
+  }
 }
 
 void setWifiLED(bool on)
 {
   digitalWrite(blue, on ? HIGH : LOW);
+}
+
+
+void messageReceivedLocal(char *topic, byte *payload, unsigned int length)
+{
+  
+  Serial.print("Received [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if (strcmp(topic, MQTT_TOPIC_CHOPPER_GET) == 0) {
+    JsonDocument doc;
+    deserializeJson(doc, (char *) payload);
+    JsonObject state = doc["state"];
+    JsonObject reported = state["reported"];
+    int hits = reported["hitcount"];
+    Serial.print("hits: ");
+    Serial.println(hits);
+    hitcount = hits;
+  }
+
 }
 
 void setup()
@@ -81,7 +146,7 @@ void setup()
   pinMode(blue,   OUTPUT);
   pinMode(button, INPUT);
 
-  resetHealthLEDs();
+  updateHealthLEDs();
   setWifiLED(false);
   
   WiFi.hostname(THINGNAME);
@@ -95,13 +160,10 @@ void setup()
   net.setClientRSACert(&client_crt, &key);
 
   client.setServer(MQTT_HOST, MQTT_PORT);
-  client.setCallback(messageReceived);
-  //client.setKeepAlive(5);
+  client.setCallback(messageReceivedLocal);
 
   connectToMqtt();
   subscribeToTopic(MQTT_TOPIC_CHOPPER_GET);
-  //subscribeToTopic("chopper/will");
-
   
 }
 
@@ -116,7 +178,6 @@ void loop()
     //checkWiFiThenMQTTNonBlocking();
     //checkWiFiThenReboot();
     subscribeToTopic(MQTT_TOPIC_CHOPPER_GET);
-    //subscribeToTopic("chopper/will");
   }
   else
   {
@@ -130,18 +191,15 @@ void loop()
       sendHeartbeat();
     }
 
-    /*
+    updateHealthLEDs();
+
     int buttonState = digitalRead(button);
-    if (buttonState == HIGH) {
-      //Serial.println("BUTTON == HIGH");
-      digitalWrite(red, HIGH);
-      digitalWrite(yellow, LOW);
+    if (buttonState == HIGH && buttonPrevState == LOW) {
+      Serial.println("Reset hitcount");
+      resetHitcount();
     }
-    else {
-      digitalWrite(red, LOW);
-      digitalWrite(yellow, HIGH);
-    }
-  */
+    buttonPrevState = buttonState;
+    
   }
 }
 

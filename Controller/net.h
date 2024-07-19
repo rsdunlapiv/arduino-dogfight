@@ -85,6 +85,12 @@ void subscribeToTopic(const char *topic)
   }
 }
 
+void publishToTopic(const char *topic, const char *msg)
+{
+  if (!client.publish(topic, msg, false))
+    pubSubErr(client.state());
+}
+
 void connectToMqtt(bool nonBlocking = false)
 {
   Serial.print("MQTT connecting ");
