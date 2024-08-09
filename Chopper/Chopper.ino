@@ -1,65 +1,33 @@
-#ifdef ESP32
-#include <WiFi.h>
-#elif defined(ESP8266)
+#define D1_PIN 5
+#define D2_PIN 4
+#define D3_PIN 0
+#define D4_PIN 2
+#define D5_PIN 14
+#define D6_PIN 12
+#define D7_PIN 13
+
 #include <ESP8266WiFi.h>
-#else
-#error Platform not supported
-#endif
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h> //https://github.com/bblanchon/ArduinoJson (use v6.xx)
+#include <ArduinoJson.h>
 #include <time.h>
 #include "PinDefinitionsAndMore.h"
 #include <IRremote.hpp>
 #define emptyString String()
 
 #include "secrets.h"
+#include "net.h"
 
-const int MQTT_PORT = 8883;
-//const char MQTT_SUB_TOPIC[] = "$aws/things/" THINGNAME "/shadow/update";
-//const char MQTT_PUB_TOPIC[] = "$aws/things/" THINGNAME "/shadow/update";
+#define HEARTBEAT_DELAY 5000   //ms delay between heatbeat messages
+#define SIGNALS_PER_HIT 10     //effecively, how long do we need to receive IR signal to count as one "hit"
 
-#ifdef USE_SUMMER_TIME_DST
-uint8_t DST = 1;
-#else
-uint8_t DST = 0;
-#endif
-
-#define HEARTBEAT_DELAY 1000   //ms delay between heatbeat messages
-
-
-WiFiClientSecure net;
-
-#ifdef ESP8266
-BearSSL::X509List cert(cacert);
-BearSSL::X509List client_crt(client_cert);
-BearSSL::PrivateKey key(privkey);
-#endif
-
-PubSubClient client(net);
+const char MQTT_TOPIC_CHOPPER_GET[] = "$aws/things/Chopper/shadow/name/ChopperShadow/update/accepted";
+const char MQTT_TOPIC_CHOPPER_UPDATE[] = "$aws/things/Chopper/shadow/name/ChopperShadow/update";
+const char MQTT_TOPIC_CONTROLLER_UPDATE[] = "$aws/things/Controller/shadow/name/ControllerShadow/update";
 
 unsigned int hitCount = 0;
+unsigned int signalCount = 0;
 unsigned long lastHeartbeat = 0;
-time_t now;
-time_t nowish = 1510592825;
-
-void NTPConnect(void)
-{
-  Serial.print("Setting time using SNTP");
-  configTime(TIME_ZONE * 3600, DST * 3600, "pool.ntp.org", "time.nist.gov");
-  now = time(nullptr);
-  while (now < nowish)
-  {
-    delay(500);
-    Serial.print(".");
-    now = time(nullptr);
-  }
-  Serial.println("done!");
-  struct tm timeinfo;
-  gmtime_r(&now, &timeinfo);
-  Serial.print("Current time: ");
-  Serial.print(asctime(&timeinfo));
-}
 
 void setupIR(void)
 {
@@ -70,111 +38,6 @@ void setupIR(void)
 }
 
 
-void messageReceived(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("Received [");
-  Serial.print(topic);
-  Serial.print("]: ");
-  for (int i = 0; i < length; i++)
-  {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-}
-
-void pubSubErr(int8_t MQTTErr)
-{
-  if (MQTTErr == MQTT_CONNECTION_TIMEOUT)
-    Serial.print("Connection tiemout");
-  else if (MQTTErr == MQTT_CONNECTION_LOST)
-    Serial.print("Connection lost");
-  else if (MQTTErr == MQTT_CONNECT_FAILED)
-    Serial.print("Connect failed");
-  else if (MQTTErr == MQTT_DISCONNECTED)
-    Serial.print("Disconnected");
-  else if (MQTTErr == MQTT_CONNECTED)
-    Serial.print("Connected");
-  else if (MQTTErr == MQTT_CONNECT_BAD_PROTOCOL)
-    Serial.print("Connect bad protocol");
-  else if (MQTTErr == MQTT_CONNECT_BAD_CLIENT_ID)
-    Serial.print("Connect bad Client-ID");
-  else if (MQTTErr == MQTT_CONNECT_UNAVAILABLE)
-    Serial.print("Connect unavailable");
-  else if (MQTTErr == MQTT_CONNECT_BAD_CREDENTIALS)
-    Serial.print("Connect bad credentials");
-  else if (MQTTErr == MQTT_CONNECT_UNAUTHORIZED)
-    Serial.print("Connect unauthorized");
-}
-
-void connectToMqtt(bool nonBlocking = false)
-{
-  Serial.print("MQTT connecting ");
-  while (!client.connected())
-  {
-    if (client.connect(THINGNAME))
-    {
-      Serial.println("connected!");
-      //if (!client.subscribe(MQTT_SUB_TOPIC))
-      //  pubSubErr(client.state());
-    }
-    else
-    {
-      Serial.print("failed, reason -> ");
-      pubSubErr(client.state());
-      if (!nonBlocking)
-      {
-        Serial.println(" < try again in 5 seconds");
-        delay(5000);
-      }
-      else
-      {
-        Serial.println(" <");
-      }
-    }
-    if (nonBlocking)
-      break;
-  }
-}
-
-void connectToWiFi(String init_str)
-{
-  if (init_str != emptyString)
-    Serial.println(init_str);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    Serial.print(".");
-    delay(1000);
-  }
-  if (init_str != emptyString)
-    Serial.println("ok!");
-}
-
-void checkWiFiThenMQTT(void)
-{
-  connectToWiFi("Checking WiFi");
-  connectToMqtt();
-}
-
-unsigned long previousMillis = 0;
-const long interval = 5000;
-
-void checkWiFiThenMQTTNonBlocking(void)
-{
-  connectToWiFi(emptyString);
-  if (millis() - previousMillis >= interval && !client.connected()) {
-    previousMillis = millis();
-    connectToMqtt(true);
-  }
-}
-
-void checkWiFiThenReboot(void)
-{
-  connectToWiFi("Checking WiFi");
-  Serial.print("Rebooting");
-  ESP.restart();
-}
-
-
 void sendHeartbeat(void)
 {
   JsonDocument doc;
@@ -182,13 +45,9 @@ void sendHeartbeat(void)
   JsonObject reported = state.createNestedObject("reported");
   reported["connected"] = "true";
 
-  //Serial.print("Heartbeat msg = ");
-  //serializeJson(doc, Serial);
-
   char shadow[measureJson(doc) + 1];
   serializeJson(doc, shadow, sizeof(shadow));
-  if (!client.publish("$aws/things/Chopper/shadow/name/ChopperShadow/update", shadow, false))
-    pubSubErr(client.state());
+  publishToTopic(MQTT_TOPIC_CHOPPER_UPDATE, shadow);
 }
 
 void sendHitCount(void)
@@ -198,26 +57,58 @@ void sendHitCount(void)
   JsonObject reported = state.createNestedObject("reported");
   reported["hitcount"] = hitCount;
 
-  //Serial.print("Heartbeat msg = ");
-  //serializeJson(doc, Serial);
-
   char shadow[measureJson(doc) + 1];
   serializeJson(doc, shadow, sizeof(shadow));
-  if (!client.publish("$aws/things/Chopper/shadow/name/ChopperShadow/update", shadow, false))
-    pubSubErr(client.state());
+  publishToTopic(MQTT_TOPIC_CHOPPER_UPDATE, shadow);
+}
+
+uint8_t blue   = D7_PIN;
+
+void setWifiLED(bool on)
+{
+  digitalWrite(blue, on ? HIGH : LOW);
+}
+
+void messageReceivedLocal(char *topic, byte *payload, unsigned int length)
+{
+  
+  Serial.print("Received [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if (strcmp(topic, MQTT_TOPIC_CHOPPER_GET) == 0) {
+    JsonDocument doc;
+    deserializeJson(doc, (char *) payload);
+    JsonObject state = doc["state"];
+    JsonObject reported = state["reported"];
+    if (reported.containsKey("hitcount")) {
+      int hits = reported["hitcount"];
+      if (hitCount != hits) {
+        Serial.print("Resetting hits to: ");
+        Serial.println(hits);
+        hitCount = hits;
+      }
+    }
+  }
+
 }
 
 void setup()
 {
   Serial.begin(115200);
-  delay(5000);
+  delay(2000);
   Serial.println();
   Serial.println();
-#ifdef ESP32
-  WiFi.setHostname(THINGNAME);
-#else
+
+  pinMode(blue,   OUTPUT);
+  setWifiLED(false);
+
   WiFi.hostname(THINGNAME);
-#endif
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
   connectToWiFi(String("Attempting to connect to SSID: ") + String(ssid));
@@ -226,20 +117,14 @@ void setup()
 
   setupIR();
 
-#ifdef ESP32
-  net.setCACert(cacert);
-  net.setCertificate(client_cert);
-  net.setPrivateKey(privkey);
-#else
   net.setTrustAnchors(&cert);
   net.setClientRSACert(&client_crt, &key);
-#endif
 
   client.setServer(MQTT_HOST, MQTT_PORT);
-  client.setCallback(messageReceived);
-  client.setKeepAlive(5);
+  client.setCallback(messageReceivedLocal);
 
   connectToMqtt();
+  subscribeToTopic(MQTT_TOPIC_CHOPPER_GET);
 }
 
 void loop()
@@ -247,14 +132,17 @@ void loop()
   now = time(nullptr);
   if (!client.connected())
   {
+    setWifiLED(false);
     Serial.println("Reconnecting...");
     checkWiFiThenMQTT();
+    subscribeToTopic(MQTT_TOPIC_CHOPPER_GET);
     //checkWiFiThenMQTTNonBlocking();
     //checkWiFiThenReboot();
   }
   else
   {
     //Serial.println("Already connected");
+    setWifiLED(true);
     client.loop();
     if (millis() - lastHeartbeat > HEARTBEAT_DELAY)
     {
@@ -264,18 +152,18 @@ void loop()
     }
 
     if (IrReceiver.decode()) {
-        IrReceiver.printIRResultShort(&Serial);
+        IrReceiver.printIRResult9Short(&Serial);
         if (IrReceiver.decodedIRData.protocol == NEC && IrReceiver.decodedIRData.command == 0x0) {
-            //IrReceiver.printIRResultShort(&Serial);
-            Serial.print("Hit! ");
-            hitCount++;
-            Serial.println(hitCount);
-            sendHitCount();
-            //IrReceiver.resume(); // Do it here, to preserve raw data for printing with printIRResultRawFormatted()
+            signalCount++;
+            if (signalCount >= SIGNALS_PER_HIT) {
+              hitCount++;
+              signalCount = 0;
+              Serial.print("Hit! ");
+              Serial.println(hitCount);
+              sendHitCount();
+            }
         }
         IrReceiver.resume();
-
-        //Serial.println();
     }
   }
 }

@@ -24,7 +24,7 @@ const char MQTT_TOPIC_CONTROLLER_UPDATE[] = "$aws/things/Controller/shadow/name/
 
 #define HEARTBEAT_DELAY 5000   //ms delay between heatbeat messages
 
-unsigned int hitcount = 0;
+unsigned int hitCount = 0;
 unsigned long lastHeartbeat = 0;
 int buttonPrevState = LOW;
 
@@ -63,28 +63,28 @@ uint8_t blue   = D7_PIN;
 
 void updateHealthLEDs()
 {
-  if (hitcount >= 4) {
+  if (hitCount >= 4) {
    digitalWrite(red, HIGH);
    digitalWrite(yellow, LOW);
    digitalWrite(green1, LOW);
    digitalWrite(green2, LOW);
    digitalWrite(green3, LOW); 
   }
-  else if (hitcount == 3) {
+  else if (hitCount == 3) {
    digitalWrite(red, LOW);
    digitalWrite(yellow, HIGH);
    digitalWrite(green1, LOW);
    digitalWrite(green2, LOW);
    digitalWrite(green3, LOW); 
   }
-  else if (hitcount == 2) {
+  else if (hitCount == 2) {
    digitalWrite(red, LOW);
    digitalWrite(yellow, LOW);
    digitalWrite(green1, LOW);
    digitalWrite(green2, LOW);
    digitalWrite(green3, HIGH); 
   }
-  else if (hitcount == 1) {
+  else if (hitCount == 1) {
   digitalWrite(red, LOW);
    digitalWrite(yellow, LOW);
    digitalWrite(green1, LOW);
@@ -123,17 +123,21 @@ void messageReceivedLocal(char *topic, byte *payload, unsigned int length)
     deserializeJson(doc, (char *) payload);
     JsonObject state = doc["state"];
     JsonObject reported = state["reported"];
-    int hits = reported["hitcount"];
-    Serial.print("hits: ");
-    Serial.println(hits);
-    hitcount = hits;
+    if (reported.containsKey("hitcount")) {
+      int hits = reported["hitcount"];
+      if (hitCount != hits) {
+        Serial.print("Resetting hits to: ");
+        Serial.println(hits);
+        hitCount = hits;
+      }
+    }
   }
 
 }
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(38400);
   delay(2000);
   Serial.println();
   Serial.println();
